@@ -1,0 +1,212 @@
+# Example configuration entry
+esphome:
+  name: staircaseledlight
+
+esp8266:
+  board: d1_mini
+
+light:
+  - platform: neopixelbus
+    variant: WS2811
+    pin: D5
+    num_leds: 43
+    type: GRB
+    name: "Staircase upper light"
+    id: staircase_light_upper
+    internal: true
+
+  - platform: neopixelbus
+    variant: WS2811
+    pin: D7
+    num_leds: 107
+    type: GRB
+    name: "Staircase lower light"
+    id: staircase_light_lower
+    internal: true
+
+  - platform: partition
+    name: "Staircase light"
+    segments:
+      - id: staircase_light_upper
+        from: 0
+        to: 42
+        reversed: true
+      - id: staircase_light_lower
+        from: 0
+        to: 106
+    effects:
+      - addressable_scan:
+          move_interval: 10ms
+          scan_width: 3
+      - addressable_fireworks:
+      - flicker:
+      - addressable_rainbow:
+      - addressable_twinkle:
+      - addressable_color_wipe:
+      - addressable_random_twinkle:
+      - addressable_flicker:
+      - addressable_lambda:
+          name: "Color loop"
+          update_interval: 10ms
+          lambda: |-
+            // it.size() - Number of LEDs
+            // it[num] - Access the LED at index num.
+            // Set the LED at num to the given r, g, b values
+            // it[it.size()] = Color(r, g, b);
+            // Get the color at index num (Color instance)
+            // it[num].get();
+
+            static uint16_t i = 0;
+            static uint16_t color = 0;
+            static Color new_random_color = Color::random_color();
+
+            if (color == 0) {
+              it[i] = new_random_color;
+            } 
+
+            i++;
+            if (i >= it.size()) {
+              i = 0;
+              color++;
+            }
+
+            if (color >= 1) {
+              color = 0;
+              new_random_color = Color::random_color();
+            }
+
+      - addressable_lambda:
+          name: "Aurora"
+          update_interval: 10ms
+          lambda: |-
+            // Constants
+            static Color aurora_colors[6];
+            static Color base_color;
+            static float move_speed;
+            static float min_width;
+            static float max_width;
+            
+            // Effect variables
+            static Color color_effects[2];
+            static float color_centers[2];
+            static float color_widths[2];
+            static float effect_speeds[2];
+            static float color_strengths[2];
+            static uint8_t effect_phases[2];
+                        
+            if (initial_run) {
+              // Possible effect colors, picked randomly from the list
+              aurora_colors[0] = Color(230, 50, 0);
+              aurora_colors[1] = Color(230, 0, 50);
+              aurora_colors[2] = Color(0, 230, 50);
+              aurora_colors[3] = Color(50, 230, 0);
+              aurora_colors[4] = Color(50, 0, 230);
+              aurora_colors[5] = Color(0, 50, 230);
+            
+              // Reset all effects on next run
+              effect_phases[0] = 2;
+              effect_phases[1] = 2;
+            
+              // Effect width range definition
+              min_width = 40.0f;
+              max_width = it.size() / 3 * 2;
+            
+              // Effect fading speed
+              effect_speeds[0] = 0.0007f;
+              effect_speeds[1] = 0.0017f;
+            
+              // Global moving speed, negative values revert direction
+              move_speed = 0.02f;
+            
+              // Strip "background" color for the effects
+              base_color = Color(0, 128, 0);
+              it.all() = base_color;
+              return;
+            }
+            
+            Color new_colors[it.size()];
+            for (uint16_t i=0; i < it.size(); i++) {
+              new_colors[i] = base_color;
+            }
+
+            for (uint16_t i=0; i < it.size(); i++) {
+              for (uint8_t e_idx=0; e_idx < 2; e_idx++) {
+                float brightness;
+                float dist_from_effect;
+                uint8_t gradient;
+            
+                // Effect should be reset before applying
+                if (effect_phases[e_idx] == 2) {
+                  continue;
+                }
+                
+                // Apply effect to current led
+                dist_from_effect = fabs(color_centers[e_idx] - (float)i);
+                if (dist_from_effect > color_widths[e_idx]) {
+                  continue;
+                }
+                brightness = pow(1.0f - (dist_from_effect / color_widths[e_idx]), 2);
+                gradient = 255.0f * color_strengths[e_idx] * brightness;
+                new_colors[i] = new_colors[i].gradient(color_effects[e_idx], gradient);
+              }
+            }
+            
+            // Update effect state
+            
+            // Move all effects
+            for (uint8_t e_idx=0; e_idx < 2; e_idx++) {
+              color_centers[e_idx] += move_speed;
+            }
+            
+            for (uint16_t e_idx=0; e_idx<2; e_idx++) {
+              switch (effect_phases[e_idx]) {
+              case 0:
+                // In this phase the effect color is strengthening
+                color_strengths[e_idx] += effect_speeds[e_idx];
+                if (color_strengths[e_idx] >= 1.0f) {
+                  effect_phases[e_idx] = 1;
+                }
+                break;
+              case 1:
+                // In this phase the effect color is weakening
+                color_strengths[e_idx] -= effect_speeds[e_idx];
+                if (color_strengths[e_idx] <= 0.0f) {
+                  effect_phases[e_idx] = 2;
+                }
+                break;
+              case 2:
+              default:
+                {
+                  // When effect is completed, generate new random effect
+                  uint32_t rand = random_uint32();
+                  color_effects[e_idx] = aurora_colors[rand % 6];
+                  color_widths[e_idx] = (random_float() * (max_width - min_width)) + min_width;
+                  color_centers[e_idx] = random_float() * ((float)it.size() - color_widths[e_idx]);
+                  effect_phases[e_idx] = 0;
+                  break;
+                }
+              }
+              color_strengths[e_idx] = max(min(1.0f, color_strengths[e_idx]), 0.0f);
+            }
+            
+            // Apply new colors to the led strip
+            for (uint16_t i=0; i < it.size(); i++) {
+              it[i] = new_colors[i];
+            }
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Enable logging
+logger:
+  level: DEBUG
+  baud_rate: 0 # disable logging over uart
+  
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret encryption_key
+    
+ota:
+  password: !secret ota_password
